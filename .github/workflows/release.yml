@@ -1,0 +1,208 @@
+name: Release
+
+# Triggered only when a version tag is pushed, e.g. v4.3.7 or v5.0.0-beta1
+on:
+  push:
+    tags:
+      - 'v*'
+
+# One release per tag; never cancel in-progress (releasing mid-way is worse than waiting).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1 – Build signed Release APK
+  # -----------------------------------------------------------------------
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    environment: BuildAPK
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag:     ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history for changelog generation
+
+      - name: Extract version metadata
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # e.g. v4.3.7
+          VER="${TAG#v}"                     # e.g. 4.3.7
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+
+      # ---- Java & Gradle --------------------------------------------------
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ---- Secrets --------------------------------------------------------
+      - name: Decode google-services.json
+        run: echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
+
+      # ---- Build ----------------------------------------------------------
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ---- Rename ---------------------------------------------------------
+      - name: Rename APK
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          mv app/build/outputs/apk/release/app-release.apk \
+             "app/build/outputs/apk/release/Vectras-${TAG}.apk"
+
+      # ---- Keep APK for the next job --------------------------------------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: app/build/outputs/apk/release/Vectras-*.apk
+          retention-days: 1       # only needed until the release job picks it up
+
+  # -----------------------------------------------------------------------
+  # Job 2 – Create GitHub Release with APK + auto-generated changelog
+  # -----------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write           # required to create releases and upload assets
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: dist/
+
+      # Generate a changelog from commit messages since the previous tag.
+      # Falls back gracefully when there is no previous tag (first release).
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${TAG}$" | head -1 || true)
+
+          if [[ -n "$PREV_TAG" ]]; then
+            RANGE="${PREV_TAG}..${TAG}"
+            echo "Generating changelog from ${PREV_TAG} to ${TAG}"
+          else
+            RANGE="${TAG}"
+            echo "No previous tag found – listing all commits up to ${TAG}"
+          fi
+
+          # Build a markdown list grouped by conventional-commit type.
+          # Unknown / non-conventional commits go under "Other changes".
+          python3 - "$RANGE" <<'PYEOF'
+          import subprocess, sys, re
+
+          range_arg = sys.argv[1]
+          result = subprocess.run(
+              ["git", "log", range_arg, "--pretty=format:%H %s"],
+              capture_output=True, text=True
+          )
+
+          sections = {"feat": [], "fix": [], "perf": [], "refactor": [], "other": []}
+          labels   = {
+              "feat":     "New features",
+              "fix":      "Bug fixes",
+              "perf":     "Performance",
+              "refactor": "Refactoring",
+              "other":    "Other changes",
+          }
+
+          for line in result.stdout.strip().splitlines():
+            sha, _, subject = line.partition(" ")
+            m = re.match(r'^(feat|fix|perf|refactor|chore|docs|build|ci|test|style)(\(.+?\))?!?:\s*(.+)', subject, re.I)
+            if m:
+              kind = m.group(1).lower()
+              desc = m.group(3)
+              bucket = kind if kind in sections else "other"
+            else:
+              bucket = "other"
+              desc = subject
+            sections[bucket].append(f"- {desc} ([`{sha[:7]}`](../../commit/{sha}))")
+
+          lines = []
+          for key in ("feat", "fix", "perf", "refactor", "other"):
+            if sections[key]:
+              lines.append(f"### {labels[key]}")
+              lines.extend(sections[key])
+              lines.append("")
+
+          body = "\n".join(lines) if lines else "No changes recorded."
+          with open("CHANGELOG_BODY.md", "w") as f:
+            f.write(body)
+          print(body)
+          PYEOF
+
+      # Create the GitHub Release and attach the APK.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ needs.build.outputs.tag }}
+          name:       "Vectras ${{ needs.build.outputs.version }}"
+          body_path:  CHANGELOG_BODY.md
+          draft:      false
+          prerelease: ${{ contains(needs.build.outputs.tag, '-') }}
+          files:      dist/Vectras-*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- Telegram: release published ------------------------------------
+      - name: Notify Telegram – release published
+        run: |
+          if [[ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
+            VER="${{ needs.build.outputs.version }}"
+            TAG="${{ needs.build.outputs.tag }}"
+            URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+            MSG="*Vectras ${VER} released!*%0A%0ADownload: ${URL}"
+            for chat in \
+              "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d message_thread_id=8" \
+              "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
+              curl -s -o /dev/null -X POST \
+                "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                $chat -d "text=${MSG}" -d "parse_mode=Markdown"
+            done
+
+            # Also send the APK file directly to Telegram
+            for file in dist/Vectras-*.apk; do
+              [[ -f "$file" ]] || continue
+              for target in \
+                "-F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -F message_thread_id=8" \
+                "-F chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
+                curl -sf -F document=@"$file" $target \
+                  -F "caption=Vectras ${VER} — official release" \
+                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" || true
+              done
+            done
+          fi
