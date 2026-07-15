@@ -129,17 +129,54 @@ public class MainService extends Service {
                     return;
                 }
 
-                if (!(log.trim().isEmpty() || log.trim().equals(MainStartVM.TAG_FINISHED_WITHOUT_ERROR))) {
-                    new Handler(Looper.getMainLooper()).post(() -> {
-                        if (!VMManager.isExecutedCommandError(command, log, context)) {
-                            String finalLog = log.contains(MainStartVM.TAG_FINISHED_WITHOUT_ERROR) ? log.substring(0, log.lastIndexOf(MainStartVM.TAG_FINISHED_WITHOUT_ERROR) - 1) : log;
-                            // Strip the Vectras GL diagnostics block from the dialog —
-                            // it's informational output, not an error.
-                            finalLog = VMManager.stripGlDiagnostics(finalLog);
-                            if (finalLog.isEmpty()) return;
+                // Strip GL diagnostics before any processing so they don't
+                // pollute error messages or trip pattern-matching logic.
+                String cleanLog = VMManager.stripGlDiagnostics(log);
 
-                            DialogUtils.twoDialog(context, vmName, finalLog, context.getString(R.string.copy), context.getString(R.string.close), true, R.drawable.stack_24px, true,
-                                    () -> ClipboardUltils.copyToClipboard(context, log), null, null);
+                // Determine why QEMU stopped when the log is empty (status != 0).
+                // This covers:
+                //   - OOM kill / Android low-memory killer (status 137 = SIGKILL)
+                //   - QEMU binary missing or not executable (status 127 / 126)
+                //   - Any other signal-based termination
+                if (cleanLog.trim().isEmpty() && status != 0) {
+                    final String reason;
+                    if (status == 137 || status == -9) {
+                        reason = "QEMU was killed by Android (OOM / low memory).\n"
+                                + "Exit code: " + status + "\n\n"
+                                + "Try reducing RAM in VM settings or closing other apps.";
+                    } else if (status == 127) {
+                        reason = "QEMU binary not found (exit code 127).\n"
+                                + "The Termux environment may not be installed correctly.";
+                    } else if (status == 126) {
+                        reason = "QEMU binary is not executable (exit code 126).\n"
+                                + "Try reinstalling the app.";
+                    } else {
+                        reason = "QEMU exited unexpectedly with no output.\n"
+                                + "Exit code: " + status;
+                    }
+                    new Handler(Looper.getMainLooper()).post(() ->
+                            DialogUtils.oneDialog(context,
+                                    context.getString(R.string.problem_has_been_detected),
+                                    reason,
+                                    R.drawable.error_96px));
+                    VmServiceManager.stopService(context);
+                    return;
+                }
+
+                if (!(cleanLog.trim().isEmpty() || cleanLog.trim().equals(MainStartVM.TAG_FINISHED_WITHOUT_ERROR))) {
+                    new Handler(Looper.getMainLooper()).post(() -> {
+                        if (!VMManager.isExecutedCommandError(command, cleanLog, context)) {
+                            String finalLog = cleanLog.contains(MainStartVM.TAG_FINISHED_WITHOUT_ERROR)
+                                    ? cleanLog.substring(0, cleanLog.lastIndexOf(MainStartVM.TAG_FINISHED_WITHOUT_ERROR) - 1)
+                                    : cleanLog;
+                            if (finalLog.trim().isEmpty()) return;
+
+                            DialogUtils.twoDialog(context, vmName, finalLog,
+                                    context.getString(R.string.copy),
+                                    context.getString(R.string.close),
+                                    true, R.drawable.stack_24px, true,
+                                    () -> ClipboardUltils.copyToClipboard(context, log),
+                                    null, null);
                         }
                     });
                 }

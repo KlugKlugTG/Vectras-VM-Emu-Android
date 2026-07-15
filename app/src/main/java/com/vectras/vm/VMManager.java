@@ -755,8 +755,15 @@ public class VMManager {
             return false;
         } else if (!_result.contains(MainStartVM.TAG_FINISHED_WITHOUT_ERROR)) {
             //Error code: UNKNOW_ERROR
-            DialogUtils.oneDialog(_activity, _activity.getString(R.string.problem_has_been_detected), _activity.getString(R.string.vm_could_not_be_run_content) + "\n\n" + _result, R.drawable.error_96px);
-            _activity.stopService(new Intent(_activity, MainService.class));
+            // Only show the dialog when there is actual content to display.
+            // An empty _result here means the crash was already handled by
+            // the exit-code branch in MainService.onFinished.
+            if (!_result.trim().isEmpty()) {
+                DialogUtils.oneDialog(_activity, _activity.getString(R.string.problem_has_been_detected),
+                        _activity.getString(R.string.vm_could_not_be_run_content) + "\n\n" + _result,
+                        R.drawable.error_96px);
+                _activity.stopService(new Intent(_activity, MainService.class));
+            }
             isQemuStopedWithError = true;
         } else {
             isQemuStopedWithError = false;
