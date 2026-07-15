@@ -448,8 +448,19 @@ public class StartVM {
         } else if (MainSettingsManager.getVmUi(context).equals("SPICE")) {
             params += "-spice port=6999,disable-ticketing=on";
         } else if (MainSettingsManager.getVmUi(context).equals("X11")) {
-            params += "-display ";
-            params += MainSettingsManager.getUseSdl(context) ? "sdl" : "gtk" + ",gl=on";
+            // Fix: operator precedence bug — "sdl" was used without gl=on for SDL mode.
+            // Both SDL and GTK need ",gl=on" to enable virgl 3D acceleration in the guest.
+            // Without gl=on the guest OS (e.g. Cinnamon) reports "software rendering mode".
+            String displayBackend = MainSettingsManager.getUseSdl(context) ? "sdl" : "gtk";
+            params += "-display " + displayBackend + ",gl=on";
+            // When GL is active the virtual GPU must be virtio-vga-gl so the guest
+            // driver (virtio-gpu) exposes a 3D-capable device. Plain -vga std/qxl has
+            // no 3D support and causes Cinnamon/GNOME to fall back to software rendering.
+            // Only inject this when the user has not already specified a virtio-vga/gpu
+            // device in their custom params — avoid duplicates.
+            if (!mainParams.contains("virtio-vga") && !mainParams.contains("virtio-gpu")) {
+                params += " -device virtio-vga-gl";
+            }
             params += " -monitor ";
             params += MainSettingsManager.getRunQemuWithXterm(context) ? "stdio" : "vc";
         }
