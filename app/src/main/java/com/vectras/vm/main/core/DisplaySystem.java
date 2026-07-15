@@ -179,14 +179,35 @@ public class DisplaySystem {
                 + "export ZINK_DESCRIPTORS=lazy; "
                 + "export TU_DEBUG=noconform; "
                 + "export MESA_VK_WSI_PRESENT_MODE=immediate; "
+                + "_VECTRAS_GL_MODE=gpu; "
                 + "else "
                 + "export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe; "
                 + "export GALLIUM_DRIVER=llvmpipe; "
                 + "export LIBGL_ALWAYS_SOFTWARE=1; "
+                + "_VECTRAS_GL_MODE=software; "
                 + "fi; "
                 + "export MESA_GL_VERSION_OVERRIDE=4.6; "
                 + "export MESA_GLSL_VERSION_OVERRIDE=460; "
-                + "export vblank_mode=0";
+                + "export vblank_mode=0; "
+                // ---- GL diagnostics printed to the terminal ----
+                // Mirrors the style seen in QEMU/mesapt output so the user can
+                // immediately see which driver is active and what GL version Mesa reports.
+                + "echo ''; "
+                + "echo '=== Vectras GL init ==='; "
+                + "echo \"vectras: mode         : $_VECTRAS_GL_MODE\"; "
+                + "echo \"vectras: GALLIUM_DRIVER: $GALLIUM_DRIVER\"; "
+                + "echo \"vectras: GL override   : $MESA_GL_VERSION_OVERRIDE (GLSL $MESA_GLSL_VERSION_OVERRIDE)\"; "
+                // Try glxinfo -B first (gives vendor / renderer / version in one shot).
+                // Fall back to printing the raw env vars when glxinfo is not installed.
+                + "if command -v glxinfo >/dev/null 2>&1; then "
+                + "  echo 'vectras: --- glxinfo -B ---'; "
+                + "  glxinfo -B 2>&1 | grep -iE 'OpenGL|display|renderer|vendor|version|Mesa|llvmpipe|zink|turnip|freedreno' | sed 's/^/vectras: /'; "
+                + "else "
+                + "  echo 'vectras: (glxinfo not found — install mesa-demos for full GL info)'; "
+                + "  echo \"vectras: MESA_LOADER_DRIVER_OVERRIDE=$MESA_LOADER_DRIVER_OVERRIDE\"; "
+                + "fi; "
+                + "echo '======================='; "
+                + "echo ''";
     }
 
     public static void startDesktop(Context context) {
