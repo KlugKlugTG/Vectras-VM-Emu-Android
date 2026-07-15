@@ -1,105 +1,156 @@
 name: Android CI
 
+# Triggers:
+#   - Every push to master / main (smoke-build to catch breakage fast)
+#   - Every pull request against master / main
+#   - Manual run from the Actions tab (workflow_dispatch)
+#   - NOT on tag pushes — tag builds are handled by release.yml
 on:
+  push:
+    branches: [ master, main ]
+    tags-ignore: [ '**' ]
+  pull_request:
+    branches: [ master, main ]
   workflow_dispatch:
 
-jobs:
-  build:
+# Only one CI run per branch at a time; cancel the previous one if a new
+# push arrives while a build is already in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1 – Build both Debug and Release APKs
+  # -----------------------------------------------------------------------
+  build:
+    name: Build APKs
     runs-on: ubuntu-latest
     environment: BuildAPK
+    timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # needed for accurate git log in changelogs
 
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: gradle
+      # ---- Java & Gradle ---------------------------------------------------
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+      # Gradle & Android SDK build-tools cache (speeds up subsequent runs
+      # significantly; the key rotates when any build script changes).
+      - name: Cache Gradle home & wrapper
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-    - name: Create google-services.json
-      run: echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
+      - name: Make gradlew executable
+        run: chmod +x gradlew
 
-    - name: Send notification to Telegram
-      run: |
-        if [[ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
-          for chat in \
-            "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d message_thread_id=8" \
-            "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
-            curl -s -o /dev/null -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-                 $chat \
-                 -d $'text=New update available on GitHub repository and building APK.\nPlease wait about 5 minutes.\nRun ID: '${GITHUB_RUN_ID}
-          done
-        fi
+      # ---- Secrets ---------------------------------------------------------
+      - name: Decode google-services.json
+        run: echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug
-
-    - name: Build Release APK
-      run: ./gradlew assembleRelease
-
-    - name: Upload Debug APK as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-debug-apk
-        path: app/build/outputs/apk/debug/app-debug.apk
-
-    - name: Upload Release APK as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-release-apk
-        path: app/build/outputs/apk/release/app-release.apk
-
-    - name: Upload to Telegram 
-      run: |
+      # ---- Telegram: build started ----------------------------------------
+      - name: Notify Telegram – build started
+        if: github.event_name != 'pull_request'
+        run: |
           if [[ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
+            MSG="*Vectras CI started*%0ABranch: \`${{ github.ref_name }}\`%0ARun: ${{ github.run_id }}%0ACommit: ${{ github.sha }}"
+            for chat in \
+              "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d message_thread_id=8" \
+              "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
+              curl -s -o /dev/null -X POST \
+                "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                $chat -d "text=${MSG}" -d "parse_mode=Markdown"
+            done
+          fi
+
+      # ---- Build -----------------------------------------------------------
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ---- Rename with version + commit SHA --------------------------------
+      - name: Rename APKs
+        run: |
+          VERSION=$(./gradlew -q printVersionName 2>/dev/null || \
+            grep 'versionName' app/build.gradle | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          SHA="${{ github.sha }}"
+          SHORT="${SHA:0:7}"
+          mv app/build/outputs/apk/debug/app-debug.apk \
+             "app/build/outputs/apk/debug/Vectras-${VERSION}-debug-${SHORT}.apk" || true
+          mv app/build/outputs/apk/release/app-release.apk \
+             "app/build/outputs/apk/release/Vectras-${VERSION}-release-${SHORT}.apk" || true
+
+      # ---- Upload artifacts (available for 14 days) -----------------------
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vectras-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vectras-release-${{ github.sha }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+      # ---- Telegram: send APK (non-PR pushes only) -------------------------
+      - name: Upload Release APK to Telegram
+        if: github.event_name != 'pull_request'
+        run: |
+          if [[ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
+            CAPTION="*Vectras CI build ready*%0ABranch: \`${{ github.ref_name }}\`%0ARun: ${{ github.run_id }}%0A%0A_Not an official release — built automatically from the latest commit._"
             success=true
 
             for file in app/build/outputs/apk/release/*.apk; do
+              [[ -f "$file" ]] || continue
               echo "Uploading $(basename "$file")"
-              tries=0
               success_file=false
-              until [ $tries -ge 5 ]; do
-                success_targets=false
+              for try in 1 2 3 4 5; do
+                all_ok=true
                 for target in \
                   "-F chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -F message_thread_id=8" \
                   "-F chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
-
-                  if curl -s -o /dev/null -F document=@"$file" $target \
-                          -F $'caption=Done! Note that this is a version that is automatically built when there are changes in the GitHub repository, not the official version. Please only install it if you really want to see what is new.\nExplore beta releases here: https://github.com/AnBui2004/Vectras-VM-Emu-Android/releases\nRun ID: '${GITHUB_RUN_ID} \
-                          https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument; then
-                    success_targets=true
-                  else
-                    echo "Retrying upload for $file to target..."
-                    sleep 2
+                  if ! curl -sf -F document=@"$file" $target \
+                        -F "caption=${CAPTION}" \
+                        -F "parse_mode=Markdown" \
+                        "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument"; then
+                    all_ok=false
+                    echo "  -> attempt $try failed for target, retrying in 3s…"
+                    sleep 3
                   fi
                 done
-
-                if $success_targets; then
-                  success_file=true
-                  break
-                fi
-                tries=$((tries+1))
+                if $all_ok; then success_file=true; break; fi
               done
-
-              if ! $success_file; then
-                echo "Upload failed for $file"
-                success=false
-              fi
+              $success_file || success=false
             done
 
-            if [ "$success" = false ]; then
+            if ! $success; then
+              ERR="*Vectras CI* — APK upload failed for run ${{ github.run_id }}"
               for chat in \
                 "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} -d message_thread_id=8" \
                 "-d chat_id=${{ secrets.TELEGRAM_CHAT_ID_VEC }}"; do
-                curl -s -o /dev/null -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-                     $chat \
-                    -d $'text=Something went wrong and the APK file could not be uploaded.\nExplore beta releases here: https://github.com/AnBui2004/Vectras-VM-Emu-Android/releases\nRun ID: '${GITHUB_RUN_ID}
+                curl -s -o /dev/null -X POST \
+                  "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+                  $chat -d "text=${ERR}" -d "parse_mode=Markdown"
               done
+              exit 1
             fi
           fi
