@@ -133,32 +133,56 @@ public class MainService extends Service {
                 // pollute error messages or trip pattern-matching logic.
                 String cleanLog = VMManager.stripGlDiagnostics(log);
 
-                // Determine why QEMU stopped when the log is empty (status != 0).
-                // This covers:
-                //   - OOM kill / Android low-memory killer (status 137 = SIGKILL)
-                //   - QEMU binary missing or not executable (status 127 / 126)
-                //   - Any other signal-based termination
-                if (cleanLog.trim().isEmpty() && status != 0) {
-                    final String reason;
-                    if (status == 137 || status == -9) {
-                        reason = "QEMU was killed by Android (OOM / low memory).\n"
-                                + "Exit code: " + status + "\n\n"
-                                + "Try reducing RAM in VM settings or closing other apps.";
-                    } else if (status == 127) {
-                        reason = "QEMU binary not found (exit code 127).\n"
-                                + "The Termux environment may not be installed correctly.";
-                    } else if (status == 126) {
-                        reason = "QEMU binary is not executable (exit code 126).\n"
-                                + "Try reinstalling the app.";
-                    } else {
-                        reason = "QEMU exited unexpectedly with no output.\n"
-                                + "Exit code: " + status;
-                    }
+                // Check exit code FIRST — regardless of whether there is output.
+                // QEMU can print BIOS/kernel lines to stdout and still be killed by
+                // Android OOM mid-boot, leaving a non-empty log. Without this check
+                // the OOM reason was never shown; instead BIOS output appeared as the
+                // "error message".
+                if (status == 137 || status == -9) {
+                    // SIGKILL — Android OOM killer or explicit kill
+                    final String oomReason = "QEMU was killed by Android (out of memory).\n"
+                            + "Exit code: " + status + "\n\n"
+                            + "Try reducing VM RAM or closing background apps.";
                     new Handler(Looper.getMainLooper()).post(() ->
                             DialogUtils.oneDialog(context,
                                     context.getString(R.string.problem_has_been_detected),
-                                    reason,
+                                    oomReason,
                                     R.drawable.error_96px));
+                    VmServiceManager.stopService(context);
+                    return;
+                }
+
+                if (status == 127) {
+                    final String reason = "QEMU binary not found (exit code 127).\n"
+                            + "The Termux environment may not be installed correctly.";
+                    new Handler(Looper.getMainLooper()).post(() ->
+                            DialogUtils.oneDialog(context,
+                                    context.getString(R.string.problem_has_been_detected),
+                                    reason, R.drawable.error_96px));
+                    VmServiceManager.stopService(context);
+                    return;
+                }
+
+                if (status == 126) {
+                    final String reason = "QEMU binary is not executable (exit code 126).\n"
+                            + "Try reinstalling the app.";
+                    new Handler(Looper.getMainLooper()).post(() ->
+                            DialogUtils.oneDialog(context,
+                                    context.getString(R.string.problem_has_been_detected),
+                                    reason, R.drawable.error_96px));
+                    VmServiceManager.stopService(context);
+                    return;
+                }
+
+                // For all other non-zero exits: show the QEMU output if available,
+                // or a generic message with the exit code if the log is empty.
+                if (status != 0 && cleanLog.trim().isEmpty()) {
+                    final String reason = "QEMU exited unexpectedly with no output.\n"
+                            + "Exit code: " + status;
+                    new Handler(Looper.getMainLooper()).post(() ->
+                            DialogUtils.oneDialog(context,
+                                    context.getString(R.string.problem_has_been_detected),
+                                    reason, R.drawable.error_96px));
                     VmServiceManager.stopService(context);
                     return;
                 }
@@ -171,7 +195,14 @@ public class MainService extends Service {
                                     : cleanLog;
                             if (finalLog.trim().isEmpty()) return;
 
-                            DialogUtils.twoDialog(context, vmName, finalLog,
+                            // Append exit code to the log when non-zero so the user
+                            // always sees it alongside the QEMU output.
+                            if (status != 0) {
+                                finalLog += "\n\nExit code: " + status;
+                            }
+
+                            final String displayLog = finalLog;
+                            DialogUtils.twoDialog(context, vmName, displayLog,
                                     context.getString(R.string.copy),
                                     context.getString(R.string.close),
                                     true, R.drawable.stack_24px, true,
