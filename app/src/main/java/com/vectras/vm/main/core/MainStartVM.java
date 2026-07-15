@@ -149,7 +149,17 @@ public class MainStartVM {
             if (MainSettingsManager.getVmUi(context).equals("X11") && !VMManager.isVMRunning(context, vmID)) {
                 if (MainSettingsManager.getRunQemuWithXterm(context)) {
                     String logFilePath = VmFileManager.getLog(context, vmID);
-                    runCommandFormat = String.format(runCommandFormat, "mkdir -p \"" + new File(logFilePath).getParent() + "\"; xterm -e bash -c \"%s 2>&1 | tee " + logFilePath + "\"; cat " + logFilePath + "; rm " + logFilePath);
+                    // Fix 1: ensure the log directory exists before tee writes to it
+                    // Fix 2: pass DISPLAY=:0 and a universally available font (-fn fixed) to xterm
+                    //         so it doesn't fail with "cannot load font" when the X server is
+                    //         already running on :0 but the environment variable isn't inherited yet
+                    // Fix 3: guard cat/rm with [ -f ] so they don't fail when the log was never
+                    //         created (e.g. QEMU crashed before tee could write anything)
+                    runCommandFormat = String.format(runCommandFormat,
+                            "mkdir -p \"" + new File(logFilePath).getParent() + "\"; "
+                            + "DISPLAY=:0 xterm -display :0 -fn fixed -e bash -c \"%s 2>&1 | tee " + logFilePath + "\"; "
+                            + "[ -f " + logFilePath + " ] && cat " + logFilePath + "; "
+                            + "[ -f " + logFilePath + " ] && rm " + logFilePath);
                 } else {
                     runCommandFormat = String.format(runCommandFormat, "bash -c \"%s\"");
                 }
