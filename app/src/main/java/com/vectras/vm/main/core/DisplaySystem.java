@@ -210,6 +210,21 @@ public class DisplaySystem {
                 + "echo ''";
     }
 
+    /**
+     * Returns true only when the Zink/GPU path will actually be used —
+     * i.e. ~/.vectras_gpu exists AND vulkaninfo reports a device.
+     *
+     * This is used by StartVM to decide whether to pass gl=on and
+     * virtio-vga-gl to QEMU.  With llvmpipe (software mode) gl=on causes
+     * QEMU 11 to exit immediately with code 1 because llvmpipe does not
+     * expose a usable EGL platform for the QEMU SDL/GTK display backend.
+     */
+    public static boolean isGpuModeAvailable(Context context) {
+        String filesDir = context.getFilesDir().getAbsolutePath();
+        java.io.File gpuFlag = new java.io.File(filesDir + "/distro/root/.vectras_gpu");
+        return gpuFlag.exists();
+    }
+
     public static void startDesktop(Context context) {
         Terminal2 terminal2 = new Terminal2(context);
         terminal2.setDefaultShellBash();

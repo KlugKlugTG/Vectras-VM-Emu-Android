@@ -448,22 +448,26 @@ public class StartVM {
         } else if (MainSettingsManager.getVmUi(context).equals("SPICE")) {
             params += "-spice port=6999,disable-ticketing=on";
         } else if (MainSettingsManager.getVmUi(context).equals("X11")) {
-            // If the user already put "-display ..." in Quick Edit, respect it — don't add a second one.
-            // This also covers the case where they manually wrote "-display sdl,gl=on".
+            // gl=on in -display sdl/gtk requires a real EGL-capable host GPU.
+            // llvmpipe (software mode) does NOT expose EGL, so QEMU 11 exits
+            // immediately with code 1 when gl=on is passed in software mode.
+            // Only enable gl=on when the user has opted into GPU mode via ~/.vectras_gpu.
+            boolean gpuMode = com.vectras.vm.main.core.DisplaySystem.isGpuModeAvailable(context);
+
+            // If the user already wrote "-display ..." in Quick Edit, respect it.
             if (!mainParams.contains("-display ")) {
-                // Fix: operator precedence bug — "sdl" was used without gl=on for SDL mode.
-                // Both SDL and GTK need ",gl=on" to enable virgl 3D acceleration in the guest.
-                // Without gl=on the guest OS (e.g. Cinnamon) reports "software rendering mode".
                 String displayBackend = MainSettingsManager.getUseSdl(context) ? "sdl" : "gtk";
-                params += "-display " + displayBackend + ",gl=on";
+                // Add gl=on only when a real EGL GPU is available; otherwise omit it.
+                params += "-display " + displayBackend + (gpuMode ? ",gl=on" : "");
             }
-            // When GL is active the virtual GPU must be virtio-vga-gl so the guest
-            // driver (virtio-gpu) exposes a 3D-capable device. Plain -vga std/qxl has
-            // no 3D support and causes Cinnamon/GNOME to fall back to software rendering.
-            // Only inject when the user hasn't already specified one in Quick Edit.
+
+            // virtio-vga-gl also requires gl=on / EGL. In software mode use plain
+            // virtio-vga (2D only) instead so QEMU starts without errors.
+            // Skip injection entirely if the user already specified the device.
             if (!mainParams.contains("virtio-vga") && !mainParams.contains("virtio-gpu")) {
-                params += " -device virtio-vga-gl";
+                params += " -device " + (gpuMode ? "virtio-vga-gl" : "virtio-vga");
             }
+
             params += " -monitor ";
             params += MainSettingsManager.getRunQemuWithXterm(context) ? "stdio" : "vc";
         }
