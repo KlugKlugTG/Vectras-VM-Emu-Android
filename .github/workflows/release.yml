@@ -60,8 +60,38 @@ jobs:
         run: chmod +x gradlew
 
       # ---- Secrets --------------------------------------------------------
-      - name: Decode google-services.json
-        run: echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
+      - name: Prepare google-services.json
+        run: |
+          if [[ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]]; then
+            echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
+          else
+            cat > app/google-services.json << 'EOF'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "vectras-stub",
+              "storage_bucket": "vectras-stub.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.vectras.vm"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "stub" }],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+            echo "No GOOGLE_SERVICES_JSON secret — using stub (Firebase features disabled)"
+          fi
 
       # ---- Build ----------------------------------------------------------
       - name: Build Release APK
