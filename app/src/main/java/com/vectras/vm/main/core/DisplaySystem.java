@@ -142,10 +142,57 @@ public class DisplaySystem {
         });
     }
 
+    /**
+     * Builds the Mesa/OpenGL environment used by the host-side X11/VNC desktop and by
+     * any GUI app launched from it.
+     *
+     * <p>On many devices (Adreno 750 included) the default Mesa loader tries the hardware
+     * DRI3/DRI2 path and then the Zink driver (OpenGL over Vulkan). Inside the proot
+     * environment there is no DRM render node and Zink cannot enumerate a Vulkan physical
+     * device, which produces:
+     * <pre>
+     *   libEGL warning: DRI3: Screen seems not DRI3 capable
+     *   MESA: error: ZINK: failed to choose pdev
+     *   libEGL warning: egl: failed to create dri2 screen
+     * </pre>
+     * and leaves OpenGL completely broken.
+     *
+     * <p>To make OpenGL work reliably we:
+     * <ul>
+     *   <li>disable DRI3 probing ({@code LIBGL_DRI3_DISABLE=1}) so the "not DRI3 capable"
+     *       warnings and the failed dri2 screen fallback go away;</li>
+     *   <li>default to the software rasterizer (llvmpipe), which always renders;</li>
+     *   <li>only switch to GPU-accelerated Zink when a working Vulkan device is actually
+     *       reported by {@code vulkaninfo} <b>and</b> the user opted in by creating the file
+     *       {@code ~/.vectras_gpu}. This prevents re-introducing the
+     *       "failed to choose pdev" crash on devices where Zink/Turnip cannot pick a
+     *       physical device.</li>
+     * </ul>
+     */
+    public static String getGlEnvSetup() {
+        return "export DISPLAY=:0; "
+                + "export LIBGL_DRI3_DISABLE=1; "
+                + "if [ -f \"$HOME/.vectras_gpu\" ] && command -v vulkaninfo >/dev/null 2>&1 "
+                + "&& vulkaninfo --summary 2>/dev/null | grep -qi deviceName; then "
+                + "export MESA_LOADER_DRIVER_OVERRIDE=zink; "
+                + "export GALLIUM_DRIVER=zink; "
+                + "export ZINK_DESCRIPTORS=lazy; "
+                + "export TU_DEBUG=noconform; "
+                + "export MESA_VK_WSI_PRESENT_MODE=immediate; "
+                + "else "
+                + "export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe; "
+                + "export GALLIUM_DRIVER=llvmpipe; "
+                + "export LIBGL_ALWAYS_SOFTWARE=1; "
+                + "fi; "
+                + "export MESA_GL_VERSION_OVERRIDE=4.6; "
+                + "export MESA_GLSL_VERSION_OVERRIDE=460; "
+                + "export vblank_mode=0";
+    }
+
     public static void startDesktop(Context context) {
         Terminal2 terminal2 = new Terminal2(context);
         terminal2.setDefaultShellBash();
-        terminal2.execute("export DISPLAY=:0 && fluxbox > /dev/null");
+        terminal2.execute(getGlEnvSetup() + " && fluxbox > /dev/null");
     }
 
     public static void startTermuxX11(Context context) {
