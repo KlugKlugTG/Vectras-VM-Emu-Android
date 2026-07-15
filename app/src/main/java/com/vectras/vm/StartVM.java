@@ -463,8 +463,15 @@ public class StartVM {
 
             // virtio-vga-gl also requires gl=on / EGL. In software mode use plain
             // virtio-vga (2D only) instead so QEMU starts without errors.
-            // Skip injection entirely if the user already specified the device.
-            if (!mainParams.contains("virtio-vga") && !mainParams.contains("virtio-gpu")) {
+            // Skip injection entirely if the user already specified ANY VGA/GPU device
+            // — including the default "-vga std" — to prevent duplicate VGA devices
+            // which cause QEMU to exit with code 1.
+            boolean userHasVga = mainParams.contains("virtio-vga")
+                    || mainParams.contains("virtio-gpu")
+                    || mainParams.contains("-vga ")
+                    || mainParams.contains("-device VGA")
+                    || mainParams.contains("-device qxl");
+            if (!userHasVga) {
                 params += " -device " + (gpuMode ? "virtio-vga-gl" : "virtio-vga");
             }
 
