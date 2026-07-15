@@ -161,10 +161,12 @@ public class MainStartVM {
                             + "[ -f " + logFilePath + " ] && cat " + logFilePath + "; "
                             + "[ -f " + logFilePath + " ] && rm " + logFilePath);
                 } else {
-                    // Redirect stderr to stdout so QEMU error messages (e.g. "Property X
-                    // not found", "unknown device") are captured in the log and shown in
-                    // the error dialog instead of being silently discarded.
-                    runCommandFormat = String.format(runCommandFormat, "bash -c \"%s\" 2>&1");
+                    // Pass through as-is — proot's ProcessBuilder already has
+                    // redirectErrorStream(true) so the shell's stderr (which includes
+                    // QEMU's stderr) is merged into the captured stdout automatically.
+                    // Wrapping in "bash -c \"...\"" was causing \n in cleanUpCommand to
+                    // break out of the quotes and lose stderr from QEMU entirely.
+                    runCommandFormat = String.format(runCommandFormat, "%s");
                 }
 
                 if (DisplaySystem.isUseBuiltInX11()) {
@@ -311,11 +313,10 @@ public class MainStartVM {
     ) {
         VMManager.isQemuStopedWithError = false;
 
-        // The QEMU invocation itself must redirect stderr so error messages like
-        // "Property 'virti' not found" or "unknown device 'virti'" appear in the
-        // captured log rather than being silently discarded. The 2>&1 is appended
-        // inside the env string so it wraps the qemu-system-* call specifically.
-        String cleanUpCommand = " 2>&1 && echo \"" + TAG_FINISHED_WITHOUT_ERROR + "\"\nrm -r " + Config.getCacheVMPath(vmID);
+        // stderr is already merged by proot's ProcessBuilder.redirectErrorStream(true).
+        // No 2>&1 needed here — adding it was breaking the command by conflicting
+        // with the \n separator before the rm cleanup line.
+        String cleanUpCommand = " && echo \"" + TAG_FINISHED_WITHOUT_ERROR + "\"\nrm -r " + Config.getCacheVMPath(vmID);
 
         String finalCommand = VMManager.addAudioDevWav(vmID, String.format(runCommandFormat, env + cleanUpCommand));
 
