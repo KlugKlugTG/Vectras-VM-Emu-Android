@@ -110,7 +110,8 @@ public class MainService extends Service {
     public static void startCommand(String vmName, String env, Context context) {
         Terminal2 terminal2 = new Terminal2(activityContext);
         terminal2.setDefaultShellBash();
-        terminal2.setStartup("export XDG_RUNTIME_DIR=/tmp && unset PULSE_SERVER");
+        terminal2.setStartup("export XDG_RUNTIME_DIR=/tmp && unset PULSE_SERVER && "
+                + com.vectras.vm.main.core.DisplaySystem.getGlEnvSetup());
         terminal2.execute(env, new Terminal2.Terminal2Callback() {
             @Override
             public void onRunning(String command, String newLine) {
