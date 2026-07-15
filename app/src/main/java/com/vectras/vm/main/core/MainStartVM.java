@@ -161,7 +161,10 @@ public class MainStartVM {
                             + "[ -f " + logFilePath + " ] && cat " + logFilePath + "; "
                             + "[ -f " + logFilePath + " ] && rm " + logFilePath);
                 } else {
-                    runCommandFormat = String.format(runCommandFormat, "bash -c \"%s\"");
+                    // Redirect stderr to stdout so QEMU error messages (e.g. "Property X
+                    // not found", "unknown device") are captured in the log and shown in
+                    // the error dialog instead of being silently discarded.
+                    runCommandFormat = String.format(runCommandFormat, "bash -c \"%s\" 2>&1");
                 }
 
                 if (DisplaySystem.isUseBuiltInX11()) {
@@ -308,7 +311,11 @@ public class MainStartVM {
     ) {
         VMManager.isQemuStopedWithError = false;
 
-        String cleanUpCommand = " && echo \"" + TAG_FINISHED_WITHOUT_ERROR + "\"\nrm -r " + Config.getCacheVMPath(vmID);
+        // The QEMU invocation itself must redirect stderr so error messages like
+        // "Property 'virti' not found" or "unknown device 'virti'" appear in the
+        // captured log rather than being silently discarded. The 2>&1 is appended
+        // inside the env string so it wraps the qemu-system-* call specifically.
+        String cleanUpCommand = " 2>&1 && echo \"" + TAG_FINISHED_WITHOUT_ERROR + "\"\nrm -r " + Config.getCacheVMPath(vmID);
 
         String finalCommand = VMManager.addAudioDevWav(vmID, String.format(runCommandFormat, env + cleanUpCommand));
 
