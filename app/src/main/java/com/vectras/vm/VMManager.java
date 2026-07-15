@@ -660,11 +660,31 @@ public class VMManager {
         }
     }
 
+    /**
+     * Strips the Vectras GL diagnostics block from a QEMU output string so that
+     * only genuine QEMU error lines are shown in error dialogs.
+     *
+     * The GL block starts with "=== Vectras GL init ===" and ends with
+     * "=======================".  Everything between those two markers
+     * (inclusive) is produced by our own getGlEnvSetup() script and is not a
+     * QEMU error — showing it in the crash dialog confuses users.
+     */
+    public static String stripGlDiagnostics(String output) {
+        if (output == null) return "";
+        // Remove the GL block (multi-line, lazy match so we don't eat too much)
+        return output
+                .replaceAll("(?s)=== Vectras GL init ===.*?=======================\\s*", "")
+                .trim();
+    }
+
     public static boolean isExecutedCommandError(@NonNull String _command, String _result, Context _activity) {
         if (!_command.contains("qemu-system")) {
             isQemuStopedWithError = false;
             return false;
         }
+        // Strip our own GL diagnostics so they don't appear in error dialogs
+        // and don't accidentally trigger (or suppress) error-detection patterns.
+        _result = stripGlDiagnostics(_result);
 
         if (_command.contains("qemu-system") && _result.contains("Killed")) {
             isQemuStopedWithError = true;

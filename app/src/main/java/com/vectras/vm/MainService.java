@@ -133,6 +133,10 @@ public class MainService extends Service {
                     new Handler(Looper.getMainLooper()).post(() -> {
                         if (!VMManager.isExecutedCommandError(command, log, context)) {
                             String finalLog = log.contains(MainStartVM.TAG_FINISHED_WITHOUT_ERROR) ? log.substring(0, log.lastIndexOf(MainStartVM.TAG_FINISHED_WITHOUT_ERROR) - 1) : log;
+                            // Strip the Vectras GL diagnostics block from the dialog —
+                            // it's informational output, not an error.
+                            finalLog = VMManager.stripGlDiagnostics(finalLog);
+                            if (finalLog.isEmpty()) return;
 
                             DialogUtils.twoDialog(context, vmName, finalLog, context.getString(R.string.copy), context.getString(R.string.close), true, R.drawable.stack_24px, true,
                                     () -> ClipboardUltils.copyToClipboard(context, log), null, null);
