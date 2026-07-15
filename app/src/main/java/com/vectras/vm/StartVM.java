@@ -448,16 +448,19 @@ public class StartVM {
         } else if (MainSettingsManager.getVmUi(context).equals("SPICE")) {
             params += "-spice port=6999,disable-ticketing=on";
         } else if (MainSettingsManager.getVmUi(context).equals("X11")) {
-            // Fix: operator precedence bug — "sdl" was used without gl=on for SDL mode.
-            // Both SDL and GTK need ",gl=on" to enable virgl 3D acceleration in the guest.
-            // Without gl=on the guest OS (e.g. Cinnamon) reports "software rendering mode".
-            String displayBackend = MainSettingsManager.getUseSdl(context) ? "sdl" : "gtk";
-            params += "-display " + displayBackend + ",gl=on";
+            // If the user already put "-display ..." in Quick Edit, respect it — don't add a second one.
+            // This also covers the case where they manually wrote "-display sdl,gl=on".
+            if (!mainParams.contains("-display ")) {
+                // Fix: operator precedence bug — "sdl" was used without gl=on for SDL mode.
+                // Both SDL and GTK need ",gl=on" to enable virgl 3D acceleration in the guest.
+                // Without gl=on the guest OS (e.g. Cinnamon) reports "software rendering mode".
+                String displayBackend = MainSettingsManager.getUseSdl(context) ? "sdl" : "gtk";
+                params += "-display " + displayBackend + ",gl=on";
+            }
             // When GL is active the virtual GPU must be virtio-vga-gl so the guest
             // driver (virtio-gpu) exposes a 3D-capable device. Plain -vga std/qxl has
             // no 3D support and causes Cinnamon/GNOME to fall back to software rendering.
-            // Only inject this when the user has not already specified a virtio-vga/gpu
-            // device in their custom params — avoid duplicates.
+            // Only inject when the user hasn't already specified one in Quick Edit.
             if (!mainParams.contains("virtio-vga") && !mainParams.contains("virtio-gpu")) {
                 params += " -device virtio-vga-gl";
             }
